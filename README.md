@@ -1,4 +1,4 @@
-# -
+# load image from url
 学习SDWebImage后尝试自己封装
 第一版：
 简单的对异步加载进行缓存操作，具体的操作如下.      
