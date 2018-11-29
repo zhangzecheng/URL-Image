@@ -8,9 +8,9 @@
 
 #import "ZCImageManager.h"
 @interface ZCImageManager ()
-@property (nonatomic,strong) NSString *filePath;                                                    //沙盒文件夹的路径
-@property (nonatomic,strong) NSMutableDictionary<NSString *,UIImage *> *imageDictM;                 //缓存下载完的图片
-@property (nonatomic,strong) NSCache *cache;     //回调队列
+@property (nonatomic,strong) NSString *filePath;                                             //沙盒文件夹的路径
+@property (nonatomic,strong) NSMutableDictionary<NSString *,UIImage *> *imageDictM;          //缓存下载完的图片
+@property (nonatomic,strong) NSCache *cache;                                                 //回调队列
 @end
 @implementation ZCImageManager
 #pragma mark - 公有方法
@@ -70,17 +70,20 @@
     if(![[ZCImageManager shareInstance].cache objectForKey:url]) {
         
         //若还没在下载，则加入下载队列，并下载图片
-        NSMutableArray *arrM = [NSMutableArray array];
-        [arrM addObject:completion];
-        [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
+        @autoreleasepool {
+            NSMutableArray *arrM = [NSMutableArray array];
+            [arrM addObject:completion];
+            [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
+        }
         dispatch_async(dispatch_get_global_queue(0, 0), operationBlock);
     }else {
         
         //若在下载队列里，则将block赋值给这个completion
-        NSMutableArray *arrM = [[ZCImageManager shareInstance].cache objectForKey:url];
-        [arrM addObject:completion];
-        [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
-        
+        @autoreleasepool {
+            NSMutableArray *arrM = [[ZCImageManager shareInstance].cache objectForKey:url];
+            [arrM addObject:completion];
+            [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
+        }
     }
    
 }
