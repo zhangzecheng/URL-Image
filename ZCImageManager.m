@@ -7,6 +7,7 @@
 //
 
 #import "ZCImageManager.h"
+static NSInteger downloadCount = 0;
 @interface ZCImageManager ()
 @property (nonatomic,strong) NSString *filePath;                                             //沙盒文件夹的路径
 @property (nonatomic,strong) NSMutableDictionary<NSString *,UIImage *> *imageDictM;          //缓存下载完的图片
@@ -35,7 +36,7 @@
     
 }
 
-+ (void)loadImage:(NSString *)url clompletion:(ZCImageCompletion)completion {
++ (void)downloadImage:(NSString *)url clompletion:(ZCImageCompletion)completion {
     
     __block NSString *blockUrl = url;
     void (^operationBlock)(void) = ^{
@@ -62,13 +63,15 @@
             
             //删除加载这张照片的所有回调
             [[ZCImageManager shareInstance].cache removeObjectForKey:url];
+            
+            downloadCount = 0;
         });
     };
     
     if(!completion)return;
     
     if(![[ZCImageManager shareInstance].cache objectForKey:url]) {
-        
+        downloadCount ++;
         //若还没在下载，则加入下载队列，并下载图片
         @autoreleasepool {
             NSMutableArray *arrM = [NSMutableArray array];
@@ -76,6 +79,7 @@
             [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
         }
         dispatch_async(dispatch_get_global_queue(0, 0), operationBlock);
+        NSLog(@"下载的个数:%ld",(long)downloadCount);
     }else {
         
         //若在下载队列里，则将block赋值给这个completion
@@ -86,6 +90,36 @@
         }
     }
    
+}
+
++ (void)loadImage:(NSString *)url clompletion:(ZCImageCompletion)completion {
+    
+    //缓存里找，有则设置图片
+    [ZCImageManager searchImageFromMemoryWithURL:url completion:^(BOOL isExist, UIImage *image) {
+        if(isExist) {
+            if(completion) {
+                completion(YES,image);
+            }
+            return;
+        }
+        
+        //disk 里面找，有则设置图片
+        [ZCImageManager searchImageFromDiskWithURL:url completion:^(BOOL isExist, UIImage *image) {
+            if(isExist) {
+                if(completion) {
+                    completion(YES,image);
+                }
+                return;
+            }
+            
+            //加载网络图片
+            [ZCImageManager downloadImage:url clompletion:^(BOOL isExist, UIImage *image) {
+                if(completion) {
+                    completion(isExist,image);
+                }
+            }];
+        }];
+    }];
 }
 
 + (void)clearImageFromMemory {
@@ -119,7 +153,7 @@
 
 + (NSString *)formattingUrl:(NSString *)url {
     
-    return [[url componentsSeparatedByString:@"/"] componentsJoinedByString:@"_"];
+    return [url stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
 }
 #pragma mark - 生命周期
 + (instancetype)shareInstance {
