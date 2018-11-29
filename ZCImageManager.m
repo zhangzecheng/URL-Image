@@ -10,7 +10,7 @@
 @interface ZCImageManager ()
 @property (nonatomic,strong) NSString *filePath;                                                    //沙盒文件夹的路径
 @property (nonatomic,strong) NSMutableDictionary<NSString *,UIImage *> *imageDictM;                 //缓存下载完的图片
-@property (nonatomic,strong) NSMutableDictionary<NSString *, NSMutableArray *> *operationDictM;     //回调队列
+@property (nonatomic,strong) NSCache *cache;     //回调队列
 @end
 @implementation ZCImageManager
 #pragma mark - 公有方法
@@ -37,13 +37,8 @@
 
 + (void)loadImage:(NSString *)url clompletion:(ZCImageCompletion)completion {
     
-    void (^operationBlock)(void);
-    
-    //弱引用，避免循环引用
-    void (^__block weakOperationBlock)(void) = operationBlock;
     __block NSString *blockUrl = url;
-    
-    operationBlock = ^{
+    void (^operationBlock)(void) = ^{
         NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]];
         UIImage *image = [UIImage imageWithData:data];
         
@@ -59,38 +54,35 @@
             }
             
             //返回图片
-            for(ZCImageCompletion each in [ZCImageManager shareInstance].operationDictM[url]) {
+            for(ZCImageCompletion each in [[ZCImageManager shareInstance].cache objectForKey:url]) {
                 @autoreleasepool {
                     each(image,image);
                 }
             }
             
             //删除加载这张照片的所有回调
-            [[ZCImageManager shareInstance].operationDictM removeObjectForKey:url];
+            [[ZCImageManager shareInstance].cache removeObjectForKey:url];
         });
     };
     
-    weakOperationBlock = operationBlock;
-    
     if(!completion)return;
     
-    if(![ZCImageManager shareInstance].operationDictM[url]) {
+    if(![[ZCImageManager shareInstance].cache objectForKey:url]) {
         
         //若还没在下载，则加入下载队列，并下载图片
         NSMutableArray *arrM = [NSMutableArray array];
         [arrM addObject:completion];
-        [[ZCImageManager shareInstance].operationDictM setObject:arrM forKey:url];
+        [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
         dispatch_async(dispatch_get_global_queue(0, 0), operationBlock);
     }else {
         
         //若在下载队列里，则将block赋值给这个completion
-        NSMutableArray *arrM = [ZCImageManager shareInstance].operationDictM[url];
+        NSMutableArray *arrM = [[ZCImageManager shareInstance].cache objectForKey:url];
         [arrM addObject:completion];
-        [[ZCImageManager shareInstance].operationDictM setObject:arrM forKey:url];
+        [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
         
     }
    
-    NSLog(@"下载的操作队列个数:%lu",(unsigned long)[ZCImageManager shareInstance].operationDictM.allKeys.count);
 }
 
 + (void)clearImageFromMemory {
@@ -146,13 +138,15 @@
     return _imageDictM;
 }
 
-- (NSMutableDictionary *)operationDictM {
+- (NSCache *)cache {
     
-    if(!_operationDictM) {
-        _operationDictM = [NSMutableDictionary dictionary];
+    if(!_cache) {
+        _cache = [[NSCache alloc] init];
     }
-    return _operationDictM;
+    
+    return _cache;
 }
+
 
 - (NSString *)filePath {
     if(!_filePath) {
