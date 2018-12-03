@@ -8,12 +8,18 @@
 
 #import "ZCImageManager.h"
 #import <ImageIO/ImageIO.h>
+#import "ZCImageSource.h"
 
-static NSInteger downloadCount = 0;
-@interface ZCImageManager ()
-@property (nonatomic,strong) NSString *filePath;                                             //沙盒文件夹的路径
-@property (nonatomic,strong) NSMutableDictionary<NSString *,UIImage *> *imageDictM;          //缓存下载完的图片/GIF
-@property (nonatomic,strong) NSCache *cache;                                                 //回调队列
+@interface ZCImageManager () <
+NSURLSessionDelegate
+>
+
+@property (nonatomic,strong) NSString *filePath;                                                                     //沙盒文件夹的路径
+@property (nonatomic,strong) NSMutableDictionary<NSString *,NSMutableArray<ZCImageCompletion> *> *callBackDict;      //回调
+@property (nonatomic,strong) NSMutableDictionary<NSString *,ZCImageSource *> *downloadDict;                          //下载队列
+@property (nonatomic,strong) NSCache<NSString *,ZCImageSource *> *cache;                                             //已下载的图片/GIF的缓存
+@property (nonatomic,assign) BOOL isShowLoadingAnimation;                                                            //是否边下边显示
+@property (nonatomic,strong) NSURLSession *session;                                                                  //下载
 @end
 @implementation ZCImageManager
 #pragma mark - 公有方法
@@ -21,8 +27,8 @@ static NSInteger downloadCount = 0;
 + (void)searchImageSourceFromMemoryWithURL:(NSString *)url
                           completion:(ZCImageCompletion)completion {
     
-    url = [ZCImageManager formattingUrl:url];
-    UIImage *image = [ZCImageManager shareInstance].imageDictM[url];
+    ZCImageSource *imageSource = [[ZCImageManager shareInstance].cache objectForKey:url];
+    UIImage *image = imageSource.image;
     NSLog(@"下载的图片/GIF%@在memory里",image?@"存":@"不存");
     if(completion)
         completion(image!=nil,image);
@@ -32,17 +38,12 @@ static NSInteger downloadCount = 0;
 + (void)searchImageSourceFromDiskWithURL:(NSString *)url
                         completion:(ZCImageCompletion)completion {
     
-    url = [ZCImageManager formattingUrl:url];
+    NSString *formatURL = [ZCImageManager formattingUrl:url];
     //获取资源路径
-    NSString *imagePath = [[ZCImageManager shareInstance].filePath stringByAppendingPathComponent:url];
-     BOOL isGIF = [url hasSuffix:@"gif"]||[url hasSuffix:@"GIF"];
-    UIImage *image;
-    if(isGIF) {
-        image = [ZCImageManager loadGIFWithData:[NSData dataWithContentsOfFile:imagePath]];
-    }else {
-        image = [[UIImage alloc] initWithContentsOfFile:imagePath];
-    }
-    
+    NSString *imagePath = [[ZCImageManager shareInstance].filePath stringByAppendingPathComponent:formatURL];
+    ZCImageSource *imageSource = [ZCImageSource imageSourceWithImageURL:url
+                                                                   data:[NSData dataWithContentsOfFile:imagePath]];
+    UIImage *image = imageSource.image;
     NSLog(@"下载的图片/GIF%@在disk里",image?@"存":@"不存");
     if(completion)
         completion(image!=nil,image);
@@ -52,64 +53,38 @@ static NSInteger downloadCount = 0;
 //下载网络图片/GIF
 + (void)downloadImageSource:(NSString *)url clompletion:(ZCImageCompletion)completion {
     
-    BOOL isGIF = [url hasSuffix:@"gif"]||[url hasSuffix:@"GIF"];
-    NSString *blockUrl = [ZCImageManager formattingUrl:url];
-    
-    void (^operationBlock)(void) = ^{
-        NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]];
-        UIImage *image;
-        if(isGIF) {
-            image = [ZCImageManager loadGIFWithData:data];
-        }else {
-            image = [ZCImageManager loadImageWithData:data];
-        }
+    //将回调存入回调字典中
+    @autoreleasepool {
+        NSMutableArray *arrM = [[ZCImageManager shareInstance].callBackDict objectForKey:url];
+        if(arrM.count==0)
+            arrM = [NSMutableArray array];
         
-        dispatch_sync(dispatch_get_main_queue(), ^{
-        
-            if(image) {
-        
-                //将下载好的图片储存到缓存和硬盘中
-                [[ZCImageManager shareInstance].imageDictM setObject:image forKey:blockUrl];
-                [ZCImageManager saveImageSourceToDiskWithURL:blockUrl imageSource:data];
-            }
-            
-            //返回图片
-            for(ZCImageCompletion each in [[ZCImageManager shareInstance].cache objectForKey:url]) {
-                @autoreleasepool {
-                    each(image!=nil,image);
-                }
-            }
-            
-            //删除加载这张照片的所有回调
-            [[ZCImageManager shareInstance].cache removeObjectForKey:url];
-            
-            downloadCount = 0;
-        });
-    };
-    
-    if(!completion)return;
-    
-    if(![[ZCImageManager shareInstance].cache objectForKey:url]) {
-        
-        downloadCount ++;
-        //若还没在下载，则加入下载队列，并下载图片
-        @autoreleasepool {
-            NSMutableArray *arrM = [NSMutableArray array];
+        if(completion) {
             [arrM addObject:completion];
-            [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
-        }
-        dispatch_async(dispatch_get_global_queue(0, 0), operationBlock);
-        NSLog(@"下载的个数:%ld",(long)downloadCount);
-    }else {
-        
-        //若在下载队列里，则将block赋值给这个completion
-        @autoreleasepool {
-            NSMutableArray *arrM = [[ZCImageManager shareInstance].cache objectForKey:url];
-            [arrM addObject:completion];
-            [[ZCImageManager shareInstance].cache setObject:arrM forKey:url];
+            [[ZCImageManager shareInstance].callBackDict setObject:arrM forKey:url];
         }
     }
+    
+    //判断是否在下载，是则将回调加入
+    if([[ZCImageManager shareInstance].downloadDict objectForKey:url]) {
+        NSLog(@"已经在下载");
+        return;
+    }
+    
+    NSLog(@"开始下载");
+    @autoreleasepool {
+        ZCImageSource *imageSource = [ZCImageSource imageSourceWithImageURL:url
+                                                                 dataLength:0];
+        [[ZCImageManager shareInstance].downloadDict setObject:imageSource
+                                                        forKey:url];
+        //否则开始下载
+        NSURLRequest *urlRequest = [NSURLRequest requestWithURL:[NSURL URLWithString:url]];
+        NSURLSessionTask *task = [[ZCImageManager shareInstance].session dataTaskWithRequest:urlRequest];
+        [task resume];
+    }
    
+   
+    
 }
 
 //加载网络图片/GIF,包含了“查找缓存里的图片”、“查找硬盘的图片”、“下载网络图片”三个步骤
@@ -147,12 +122,15 @@ static NSInteger downloadCount = 0;
 + (UIImage *)loadLocalGIFWithImageSource:(NSString *)url {
     
     NSData *data = [NSData dataWithContentsOfFile:url];
-    return [ZCImageManager loadGIFWithData:data];
+    ZCImageSource *imageSource = [ZCImageSource imageSourceWithImageURL:url
+                                                                   data:data];
+    return imageSource.image;
 }
 
 //清除缓存里的图片/GIF
 + (void)clearImageSourceFromMemory {
-    [[ZCImageManager shareInstance].imageDictM removeAllObjects];
+    
+    [[ZCImageManager shareInstance].cache removeAllObjects];
 }
 
 //清除硬盘里的图片/GIF
@@ -167,69 +145,17 @@ static NSInteger downloadCount = 0;
     }
 }
 
-#pragma mark - 私有方法
-//将图片/GIF存到本地
-+ (void)saveImageSourceToDiskWithURL:(NSString *)url imageSource:(NSData *)imageSource {
++ (void)setShowLoadingAnimation:(BOOL)flag {
     
-    NSString *imagePath = [[ZCImageManager shareInstance].filePath stringByAppendingPathComponent:url];
-    
-    BOOL result = [imageSource writeToFile:imagePath atomically:YES];
-    
-    NSLog(@"图片保存%@",result?@"成功":@"失败");
-
+    [ZCImageManager shareInstance].isShowLoadingAnimation = flag;
 }
 
+#pragma mark - 私有方法
 //格式化url
 + (NSString *)formattingUrl:(NSString *)url {
     
-    return [[url componentsSeparatedByString:@"/"] componentsJoinedByString:@"_"];
-}
-
-//通过NSData加载GIF
-+ (UIImage *)loadGIFWithData:(NSData *)data {
-    
-    if(!data) return nil;
-    CGImageSourceRef imageSource = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
-    size_t count = CGImageSourceGetCount(imageSource);
-    NSMutableArray *imagesArrM = [NSMutableArray array];
-    NSTimeInterval duration = 0;
-    for (size_t i = 0; i < count; i++) {
-        
-        CGImageRef imageRef = CGImageSourceCreateImageAtIndex(imageSource, i, NULL);
-        if (!imageRef) continue;
-        duration += [ZCImageManager durationAtIndex:imageSource index:i];
-        [imagesArrM addObject:[UIImage imageWithCGImage:imageRef]];
-        CGImageRelease(imageRef);
-    }
-    
-    if (!duration) duration = 0.1 * count;
-    CFRelease(imageSource);
-    
-    return [UIImage animatedImageWithImages:imagesArrM duration:duration];
-}
-
-//通过NSData加载图片
-+ (UIImage *)loadImageWithData:(NSData *)data {
-    
-    return [UIImage imageWithData:data];
-}
-
-//获取每一帧的时间
-+ (CGFloat)durationAtIndex:(CGImageSourceRef)source index:(NSInteger)index {
-    
-    float duration = 0.1f;
-    CFDictionaryRef propertiesRef = CGImageSourceCopyPropertiesAtIndex(source, index, nil);
-    NSDictionary *properties = (__bridge NSDictionary *)propertiesRef;
-    NSDictionary *gifProperties = properties[(NSString *)kCGImagePropertyGIFDictionary];
-    
-    NSNumber *delayTime = gifProperties[(NSString *)kCGImagePropertyGIFUnclampedDelayTime];
-    if (delayTime) duration = delayTime.floatValue;
-    else {
-        delayTime = gifProperties[(NSString *)kCGImagePropertyGIFDelayTime];
-        if (delayTime) duration = delayTime.floatValue;
-    }
-    CFRelease(propertiesRef);
-    return duration;
+    NSString *newURL = [[url componentsSeparatedByString:@":"] componentsJoinedByString:@""];
+    return [[newURL componentsSeparatedByString:@"/"] componentsJoinedByString:@"_"];
 }
 
 #pragma mark - 生命周期
@@ -243,15 +169,77 @@ static NSInteger downloadCount = 0;
     return manager;
 }
 
-#pragma mark - setters and getters
-- (NSMutableDictionary *)imageDictM {
+#pragma mark - NSURLSessionDelegate
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
     
-    if(!_imageDictM) {
-        _imageDictM = [NSMutableDictionary dictionary];
+    // 允许处理服务器的响应，才会继续接收服务器返回的数据
+    completionHandler(NSURLSessionResponseAllow);
+    @autoreleasepool {
+        NSString *imageURL = response.URL.absoluteString;
+        ZCImageSource *imageSource = [ZCImageSource imageSourceWithImageURL:imageURL
+                                                                 dataLength:response.expectedContentLength];
+        [[ZCImageManager shareInstance].downloadDict setObject:imageSource
+                                                        forKey:imageURL];
     }
-    return _imageDictM;
+    
+    
 }
 
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+    
+    NSString *imageURL = dataTask.response.URL.absoluteString;
+    NSString *formatURL = [ZCImageManager formattingUrl:imageURL];
+    ZCImageSource *imageSource = [[ZCImageManager shareInstance].downloadDict objectForKey:imageURL];
+    [imageSource updateReceiveData:data];
+    UIImage *image = imageSource.image;
+    
+    //是否边下边显示
+    if([ZCImageManager shareInstance].isShowLoadingAnimation&&
+       imageSource.sourceType == ZCImageSourceTypeImage) {
+        
+        NSMutableArray *arrM = [[ZCImageManager shareInstance].callBackDict objectForKey:imageURL];
+        for(ZCImageCompletion completion in arrM) {
+            @autoreleasepool {
+                completion(image!=nil,image);
+            }
+        }
+    }
+    if(imageSource.isFinish) {
+        
+        //将下载好的图片储存到缓存和硬盘中
+        [[ZCImageManager shareInstance].cache setObject:imageSource
+                                                 forKey:imageURL];
+        [imageSource saveInLocal:[[ZCImageManager shareInstance].filePath stringByAppendingPathComponent:formatURL]];
+        
+        //返回图片
+        NSMutableArray *arrM = [[ZCImageManager shareInstance].callBackDict objectForKey:imageURL];
+        for(ZCImageCompletion completion in arrM) {
+            @autoreleasepool {
+                completion(image!=nil,image);
+            }
+        }
+        
+        //删除加载这张照片的所有回调
+        [[ZCImageManager shareInstance].callBackDict removeObjectForKey:imageURL];
+        [[ZCImageManager shareInstance].downloadDict removeObjectForKey:imageURL];
+    }
+}
+#pragma mark - setters and getters
+- (NSMutableDictionary<NSString *,NSMutableArray<ZCImageCompletion> *> *)callBackDict {
+    
+    if(!_callBackDict) {
+        _callBackDict = [NSMutableDictionary dictionary];
+    }
+    return _callBackDict;
+}
+
+- (NSMutableDictionary<NSString *,ZCImageSource *> *)downloadDict {
+    
+    if(!_downloadDict) {
+        _downloadDict = [NSMutableDictionary dictionary];
+    }
+    return _downloadDict;
+}
 - (NSCache *)cache {
     
     if(!_cache) {
@@ -292,4 +280,14 @@ static NSInteger downloadCount = 0;
     
 }
 
+- (NSURLSession *)session {
+    
+    if(!_session) {
+        _session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration defaultSessionConfiguration]
+                                                 delegate:self
+                                            delegateQueue:[NSOperationQueue mainQueue]];
+    }
+    
+    return _session;
+}
 @end

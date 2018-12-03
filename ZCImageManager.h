@@ -8,7 +8,6 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-
 typedef void (^ZCImageCompletion)(BOOL isExist,UIImage *image);
 
 @interface ZCImageManager : NSObject
@@ -63,4 +62,9 @@ typedef void (^ZCImageCompletion)(BOOL isExist,UIImage *image);
  *  @brief 清除硬盘里的图片/GIF
  */
 + (void)clearImageSourceFromDisk;
+
+/*
+ *  @breif 图片(不包括GIF)过大时，是否边下边显示
+ */
++ (void)setShowLoadingAnimation:(BOOL)flag;
 @end
