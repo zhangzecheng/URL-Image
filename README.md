@@ -13,6 +13,9 @@
 第二版：           
 将可变字典的“缓存”替换为NSCache
 
+第三版：          
+可加载网络GIF和本地GIF
+
 如何使用？       
 1.引入 #import "UIImageView+URLImage.h".      
 2.调用 loadURLImageWith:(NSString *)url placeImage:(UIImage *)placeImage 方法即可
