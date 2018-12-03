@@ -13,7 +13,7 @@
 - (void)loadURLImageWith:(NSString *)url placeImage:(UIImage *)placeImage {
     self.image = placeImage;
     
-    [ZCImageManager loadImage:url clompletion:^(BOOL isExist, UIImage *image) {
+    [ZCImageManager loadImageSource:url clompletion:^(BOOL isExist, UIImage *image) {
         if(isExist) {
             self.image = image;
         }

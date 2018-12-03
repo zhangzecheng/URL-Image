@@ -7,57 +7,76 @@
 //
 
 #import "ZCImageManager.h"
+#import <ImageIO/ImageIO.h>
+
 static NSInteger downloadCount = 0;
 @interface ZCImageManager ()
 @property (nonatomic,strong) NSString *filePath;                                             //沙盒文件夹的路径
-@property (nonatomic,strong) NSMutableDictionary<NSString *,UIImage *> *imageDictM;          //缓存下载完的图片
+@property (nonatomic,strong) NSMutableDictionary<NSString *,UIImage *> *imageDictM;          //缓存下载完的图片/GIF
 @property (nonatomic,strong) NSCache *cache;                                                 //回调队列
 @end
 @implementation ZCImageManager
 #pragma mark - 公有方法
-+ (void)searchImageFromMemoryWithURL:(NSString *)url
+//查找缓存里的图片/GIF
++ (void)searchImageSourceFromMemoryWithURL:(NSString *)url
                           completion:(ZCImageCompletion)completion {
     
+    url = [ZCImageManager formattingUrl:url];
     UIImage *image = [ZCImageManager shareInstance].imageDictM[url];
-    NSLog(@"下载的图片%@在memory里",image?@"存":@"不存");
+    NSLog(@"下载的图片/GIF%@在memory里",image?@"存":@"不存");
     if(completion)
-        completion(image,image);
+        completion(image!=nil,image);
 }
 
-+ (void)searchImageFromDiskWithURL:(NSString *)url
+//查找硬盘的图片/GIF
++ (void)searchImageSourceFromDiskWithURL:(NSString *)url
                         completion:(ZCImageCompletion)completion {
     
-    //获取图片路径
+    url = [ZCImageManager formattingUrl:url];
+    //获取资源路径
     NSString *imagePath = [[ZCImageManager shareInstance].filePath stringByAppendingPathComponent:url];
-    UIImage *image = [[UIImage alloc] initWithContentsOfFile:imagePath];
-     NSLog(@"下载的图片%@在disk里",image?@"存":@"不存");
+     BOOL isGIF = [url hasSuffix:@"gif"]||[url hasSuffix:@"GIF"];
+    UIImage *image;
+    if(isGIF) {
+        image = [ZCImageManager loadGIFWithData:[NSData dataWithContentsOfFile:imagePath]];
+    }else {
+        image = [[UIImage alloc] initWithContentsOfFile:imagePath];
+    }
+    
+    NSLog(@"下载的图片/GIF%@在disk里",image?@"存":@"不存");
     if(completion)
-        completion(image, image);
+        completion(image!=nil,image);
     
 }
 
-+ (void)downloadImage:(NSString *)url clompletion:(ZCImageCompletion)completion {
+//下载网络图片/GIF
++ (void)downloadImageSource:(NSString *)url clompletion:(ZCImageCompletion)completion {
     
-    __block NSString *blockUrl = url;
+    BOOL isGIF = [url hasSuffix:@"gif"]||[url hasSuffix:@"GIF"];
+    NSString *blockUrl = [ZCImageManager formattingUrl:url];
+    
     void (^operationBlock)(void) = ^{
         NSData *data = [NSData dataWithContentsOfURL:[NSURL URLWithString:url]];
-        UIImage *image = [UIImage imageWithData:data];
+        UIImage *image;
+        if(isGIF) {
+            image = [ZCImageManager loadGIFWithData:data];
+        }else {
+            image = [ZCImageManager loadImageWithData:data];
+        }
         
         dispatch_sync(dispatch_get_main_queue(), ^{
-            
+        
             if(image) {
-                
-                blockUrl = [ZCImageManager formattingUrl:url];
-                
+        
                 //将下载好的图片储存到缓存和硬盘中
-                [[ZCImageManager shareInstance].imageDictM setObject:image forKey:url];
-                [ZCImageManager saveImageToDiskWithURL:blockUrl image:image];
+                [[ZCImageManager shareInstance].imageDictM setObject:image forKey:blockUrl];
+                [ZCImageManager saveImageSourceToDiskWithURL:blockUrl imageSource:data];
             }
             
             //返回图片
             for(ZCImageCompletion each in [[ZCImageManager shareInstance].cache objectForKey:url]) {
                 @autoreleasepool {
-                    each(image,image);
+                    each(image!=nil,image);
                 }
             }
             
@@ -71,6 +90,7 @@ static NSInteger downloadCount = 0;
     if(!completion)return;
     
     if(![[ZCImageManager shareInstance].cache objectForKey:url]) {
+        
         downloadCount ++;
         //若还没在下载，则加入下载队列，并下载图片
         @autoreleasepool {
@@ -92,10 +112,11 @@ static NSInteger downloadCount = 0;
    
 }
 
-+ (void)loadImage:(NSString *)url clompletion:(ZCImageCompletion)completion {
+//加载网络图片/GIF,包含了“查找缓存里的图片”、“查找硬盘的图片”、“下载网络图片”三个步骤
++ (void)loadImageSource:(NSString *)url clompletion:(ZCImageCompletion)completion {
     
     //缓存里找，有则设置图片
-    [ZCImageManager searchImageFromMemoryWithURL:url completion:^(BOOL isExist, UIImage *image) {
+    [ZCImageManager searchImageSourceFromMemoryWithURL:url completion:^(BOOL isExist, UIImage *image) {
         if(isExist) {
             if(completion) {
                 completion(YES,image);
@@ -104,7 +125,7 @@ static NSInteger downloadCount = 0;
         }
         
         //disk 里面找，有则设置图片
-        [ZCImageManager searchImageFromDiskWithURL:url completion:^(BOOL isExist, UIImage *image) {
+        [ZCImageManager searchImageSourceFromDiskWithURL:url completion:^(BOOL isExist, UIImage *image) {
             if(isExist) {
                 if(completion) {
                     completion(YES,image);
@@ -113,7 +134,7 @@ static NSInteger downloadCount = 0;
             }
             
             //加载网络图片
-            [ZCImageManager downloadImage:url clompletion:^(BOOL isExist, UIImage *image) {
+            [ZCImageManager downloadImageSource:url clompletion:^(BOOL isExist, UIImage *image) {
                 if(completion) {
                     completion(isExist,image);
                 }
@@ -122,11 +143,20 @@ static NSInteger downloadCount = 0;
     }];
 }
 
-+ (void)clearImageFromMemory {
+//加载本地GIF
++ (UIImage *)loadLocalGIFWithImageSource:(NSString *)url {
+    
+    NSData *data = [NSData dataWithContentsOfFile:url];
+    return [ZCImageManager loadGIFWithData:data];
+}
+
+//清除缓存里的图片/GIF
++ (void)clearImageSourceFromMemory {
     [[ZCImageManager shareInstance].imageDictM removeAllObjects];
 }
 
-+ (void)clearImageFromDisk {
+//清除硬盘里的图片/GIF
++ (void)clearImageSourceFromDisk {
     
     NSError *error;
     [[NSFileManager defaultManager] removeItemAtPath:[ZCImageManager shareInstance].filePath
@@ -138,23 +168,70 @@ static NSInteger downloadCount = 0;
 }
 
 #pragma mark - 私有方法
-+ (void)saveImageToDiskWithURL:(NSString *)url image:(UIImage *)image {
+//将图片/GIF存到本地
++ (void)saveImageSourceToDiskWithURL:(NSString *)url imageSource:(NSData *)imageSource {
     
     NSString *imagePath = [[ZCImageManager shareInstance].filePath stringByAppendingPathComponent:url];
     
-    BOOL result;
-    if([imagePath hasSuffix:@"png"])
-       result = [UIImagePNGRepresentation(image) writeToFile:imagePath atomically:YES];
-    else
-       result = [UIImageJPEGRepresentation(image, 0) writeToFile:imagePath atomically:YES];
+    BOOL result = [imageSource writeToFile:imagePath atomically:YES];
     
     NSLog(@"图片保存%@",result?@"成功":@"失败");
+
 }
 
+//格式化url
 + (NSString *)formattingUrl:(NSString *)url {
     
-    return [url stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+    return [[url componentsSeparatedByString:@"/"] componentsJoinedByString:@"_"];
 }
+
+//通过NSData加载GIF
++ (UIImage *)loadGIFWithData:(NSData *)data {
+    
+    if(!data) return nil;
+    CGImageSourceRef imageSource = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+    size_t count = CGImageSourceGetCount(imageSource);
+    NSMutableArray *imagesArrM = [NSMutableArray array];
+    NSTimeInterval duration = 0;
+    for (size_t i = 0; i < count; i++) {
+        
+        CGImageRef imageRef = CGImageSourceCreateImageAtIndex(imageSource, i, NULL);
+        if (!imageRef) continue;
+        duration += [ZCImageManager durationAtIndex:imageSource index:i];
+        [imagesArrM addObject:[UIImage imageWithCGImage:imageRef]];
+        CGImageRelease(imageRef);
+    }
+    
+    if (!duration) duration = 0.1 * count;
+    CFRelease(imageSource);
+    
+    return [UIImage animatedImageWithImages:imagesArrM duration:duration];
+}
+
+//通过NSData加载图片
++ (UIImage *)loadImageWithData:(NSData *)data {
+    
+    return [UIImage imageWithData:data];
+}
+
+//获取每一帧的时间
++ (CGFloat)durationAtIndex:(CGImageSourceRef)source index:(NSInteger)index {
+    
+    float duration = 0.1f;
+    CFDictionaryRef propertiesRef = CGImageSourceCopyPropertiesAtIndex(source, index, nil);
+    NSDictionary *properties = (__bridge NSDictionary *)propertiesRef;
+    NSDictionary *gifProperties = properties[(NSString *)kCGImagePropertyGIFDictionary];
+    
+    NSNumber *delayTime = gifProperties[(NSString *)kCGImagePropertyGIFUnclampedDelayTime];
+    if (delayTime) duration = delayTime.floatValue;
+    else {
+        delayTime = gifProperties[(NSString *)kCGImagePropertyGIFDelayTime];
+        if (delayTime) duration = delayTime.floatValue;
+    }
+    CFRelease(propertiesRef);
+    return duration;
+}
+
 #pragma mark - 生命周期
 + (instancetype)shareInstance {
     
