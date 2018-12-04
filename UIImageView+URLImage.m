@@ -12,7 +12,6 @@
 @implementation UIImageView (URLImage)
 - (void)loadURLImageWith:(NSString *)url placeImage:(UIImage *)placeImage {
     self.image = placeImage;
-    
     [ZCImageManager setShowLoadingAnimation:YES];
     [ZCImageManager loadImageSource:url clompletion:^(BOOL isExist, UIImage *image) {
         if(isExist) {

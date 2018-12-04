@@ -49,9 +49,8 @@
     
     if(self = [super init]) {
         self.receiveData = [NSMutableData dataWithData:data];
-        self.imageSourceRef = CGImageSourceCreateIncremental(NULL);
-        CGImageSourceUpdateData(self.imageSourceRef, (CFDataRef)self.receiveData, self.isFinish);
         self.dataLength = data.length;
+        self.imageSourceRef = nil;
         _imageURL = imageURL;
         self.isGIF = ([_imageURL hasSuffix:@"gif"]||[_imageURL hasSuffix:@"GIF"]);
     }
@@ -62,10 +61,12 @@
 //更新图片资源的data
 - (void)updateReceiveData:(NSData *)data {
     
+    if(!self.imageSourceRef) return;
+    
     [data enumerateByteRangesUsingBlock:^(const void * _Nonnull bytes, NSRange byteRange, BOOL * _Nonnull stop) {
         [self.receiveData appendBytes:bytes length:byteRange.length];
     }];
-    CGImageSourceUpdateData(self.imageSourceRef, (CFDataRef)self.receiveData, self.isFinish);
+    CGImageSourceUpdateData(self.imageSourceRef, (CFDataRef)[NSData dataWithData:self.receiveData], self.isFinish);
 }
 
 - (void)saveInLocal:(NSString *)filePath {
@@ -77,10 +78,15 @@
 //通过data加载UIImage
 - (UIImage *)loadImage {
     
-    CGImageRef imageRef = CGImageSourceCreateImageAtIndex(self.imageSourceRef, 0, NULL);
-    UIImage *image = [UIImage imageWithCGImage:imageRef];
-    CGImageRelease(imageRef);
-    return image;
+    if(self.imageSourceRef) {
+        CGImageRef imageRef = CGImageSourceCreateImageAtIndex(self.imageSourceRef, 0, NULL);
+        UIImage *image = [UIImage imageWithCGImage:imageRef];
+        CGImageRelease(imageRef);
+        return image;
+    }
+    
+    return [[UIImage alloc] initWithData:self.receiveData];
+   
 }
 
 //通过data加载GIF
