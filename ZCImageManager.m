@@ -29,7 +29,8 @@ NSURLSessionDelegate
     
     ZCImageSource *imageSource = [[ZCImageManager shareInstance].cache objectForKey:url];
     UIImage *image = imageSource.image;
-    NSLog(@"下载的图片/GIF%@在memory里",image?@"存":@"不存");
+    if(image)
+        NSLog(@"下载的图片/GIF存在memory里");
     if(completion)
         completion(image!=nil,image);
 }
@@ -44,7 +45,8 @@ NSURLSessionDelegate
     ZCImageSource *imageSource = [ZCImageSource imageSourceWithImageURL:url
                                                                    data:[NSData dataWithContentsOfFile:imagePath]];
     UIImage *image = imageSource.image;
-    NSLog(@"下载的图片/GIF%@在disk里",image?@"存":@"不存");
+    if(image)
+        NSLog(@"下载的图片/GIF存在disk里");
     if(completion)
         completion(image!=nil,image);
     
@@ -98,7 +100,7 @@ NSURLSessionDelegate
             }
             return;
         }
-        
+//
         //disk 里面找，有则设置图片
         [ZCImageManager searchImageSourceFromDiskWithURL:url completion:^(BOOL isExist, UIImage *image) {
             if(isExist) {
@@ -158,6 +160,16 @@ NSURLSessionDelegate
     return [[newURL componentsSeparatedByString:@"/"] componentsJoinedByString:@"_"];
 }
 
+- (void)handleAllCallBack:(NSString *)imageURL image:(UIImage *)image {
+    
+    NSMutableArray *arrM = [[ZCImageManager shareInstance].callBackDict objectForKey:imageURL];
+    for(ZCImageCompletion completion in arrM) {
+        @autoreleasepool {
+            completion(image!=nil,image);
+        }
+    }
+}
+
 #pragma mark - 生命周期
 + (instancetype)shareInstance {
     
@@ -170,7 +182,10 @@ NSURLSessionDelegate
 }
 
 #pragma mark - NSURLSessionDelegate
-- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveResponse:(NSURLResponse *)response completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+didReceiveResponse:(NSURLResponse *)response
+ completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
     
     // 允许处理服务器的响应，才会继续接收服务器返回的数据
     completionHandler(NSURLSessionResponseAllow);
@@ -185,24 +200,22 @@ NSURLSessionDelegate
     
 }
 
-- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)dataTask didReceiveData:(NSData *)data {
+- (void)URLSession:(NSURLSession *)session
+          dataTask:(NSURLSessionDataTask *)dataTask
+    didReceiveData:(NSData *)data {
+    
     
     NSString *imageURL = dataTask.response.URL.absoluteString;
     NSString *formatURL = [ZCImageManager formattingUrl:imageURL];
     ZCImageSource *imageSource = [[ZCImageManager shareInstance].downloadDict objectForKey:imageURL];
     [imageSource updateReceiveData:data];
     UIImage *image = imageSource.image;
-    
+
     //是否边下边显示
     if([ZCImageManager shareInstance].isShowLoadingAnimation&&
        imageSource.sourceType == ZCImageSourceTypeImage) {
         
-        NSMutableArray *arrM = [[ZCImageManager shareInstance].callBackDict objectForKey:imageURL];
-        for(ZCImageCompletion completion in arrM) {
-            @autoreleasepool {
-                completion(image!=nil,image);
-            }
-        }
+        [self handleAllCallBack:imageURL image:image];
     }
     if(imageSource.isFinish) {
         
@@ -212,18 +225,19 @@ NSURLSessionDelegate
         [imageSource saveInLocal:[[ZCImageManager shareInstance].filePath stringByAppendingPathComponent:formatURL]];
         
         //返回图片
-        NSMutableArray *arrM = [[ZCImageManager shareInstance].callBackDict objectForKey:imageURL];
-        for(ZCImageCompletion completion in arrM) {
-            @autoreleasepool {
-                completion(image!=nil,image);
-            }
-        }
+        [self handleAllCallBack:imageURL image:image];
         
         //删除加载这张照片的所有回调
         [[ZCImageManager shareInstance].callBackDict removeObjectForKey:imageURL];
         [[ZCImageManager shareInstance].downloadDict removeObjectForKey:imageURL];
     }
 }
+
+- (void)URLSession:(NSURLSession *)session didBecomeInvalidWithError:(NSError *)error {
+    
+    NSLog(@"加载失败:%@",error.userInfo);
+}
+
 #pragma mark - setters and getters
 - (NSMutableDictionary<NSString *,NSMutableArray<ZCImageCompletion> *> *)callBackDict {
     

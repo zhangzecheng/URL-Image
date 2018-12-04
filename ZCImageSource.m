@@ -50,6 +50,7 @@
     if(self = [super init]) {
         self.receiveData = [NSMutableData dataWithData:data];
         self.imageSourceRef = CGImageSourceCreateIncremental(NULL);
+        CGImageSourceUpdateData(self.imageSourceRef, (CFDataRef)self.receiveData, self.isFinish);
         self.dataLength = data.length;
         _imageURL = imageURL;
         self.isGIF = ([_imageURL hasSuffix:@"gif"]||[_imageURL hasSuffix:@"GIF"]);
@@ -64,7 +65,6 @@
     [data enumerateByteRangesUsingBlock:^(const void * _Nonnull bytes, NSRange byteRange, BOOL * _Nonnull stop) {
         [self.receiveData appendBytes:bytes length:byteRange.length];
     }];
-   
     CGImageSourceUpdateData(self.imageSourceRef, (CFDataRef)self.receiveData, self.isFinish);
 }
 
